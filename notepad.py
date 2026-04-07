@@ -1,182 +1,131 @@
 import streamlit as st
 import datetime
-import requests
-import re
+import json
 
-from analysis_utils import analyze_text
+# 🔥 IMPORT ANALYSIS + DATABASE
+from analysis_utils import detect_rumination, detect_emotion_clarity
 from database import init_db, save_full_data
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
 
-
-# 🔥 STRONG CLEAN FUNCTION (FINAL)
-def clean_text(text):
-    if not text:
-        return ""
-
-    # remove ALL html tags
-    text = re.sub(r'<.*?>', '', text)
-
-    # remove unwanted labels
-    text = text.replace("🧠 Rumination:", "")
-    text = text.replace("💬 Emotional Clarity:", "")
-    text = text.replace("Rumination:", "")
-    text = text.replace("Emotional Clarity:", "")
-
-    # remove extra spaces/newlines
-    text = re.sub(r'\n+', '\n', text)
-
-    return text.strip()
-
-
-# 🧠 Mood Detection (Ollama)
+# 🔥 Mood detection (same as chat)
 def detect_mood(text):
-    prompt = f"""
-Return ONLY one word: sad / happy / anxiety / neutral
+    text = text.lower()
 
-Text: "{text}"
-"""
-
-    try:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": "llama3:8b",
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.2}
-            },
-            timeout=10
-        )
-
-        if response.status_code == 200:
-            mood = response.json().get("response", "").strip().lower()
-            if mood in ["sad", "happy", "anxiety", "neutral"]:
-                return mood
-
-    except:
-        pass
-
-    return "neutral"
+    if any(word in text for word in ["sad", "depressed", "low"]):
+        return "sad"
+    elif any(word in text for word in ["happy", "good", "better"]):
+        return "happy"
+    elif any(word in text for word in ["anxious", "worried", "stress"]):
+        return "anxiety"
+    else:
+        return "neutral"
 
 
-# 😊 Sentiment words
-def detect_sentiment_words(text):
-    prompt = f"""
-Positive: words
-Negative: words
-
-Text: "{text}"
-"""
-
-    try:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": "llama3:8b",
-                "prompt": prompt,
-                "stream": False
-            },
-            timeout=10
-        )
-
-        if response.status_code == 200:
-            result = response.json().get("response", "")
-
-            pos, neg = [], []
-
-            for line in result.split("\n"):
-                if "Positive:" in line:
-                    pos = [w.strip() for w in line.replace("Positive:", "").split(",") if w.strip()]
-                if "Negative:" in line:
-                    neg = [w.strip() for w in line.replace("Negative:", "").split(",") if w.strip()]
-
-            return pos, neg
-
-    except:
-        pass
-
-    return [], []
-
-
-# 📝 MAIN
 def show_notepad():
 
+    # 🔥 Initialize DB
     init_db()
 
+    # CSS styling (same as yours)
+    st.markdown("""
+    <style>
+    .notepad-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 20px;
+        text-align: center;
+        color: white;
+        margin-bottom: 2rem;
+    }
+    .thought-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        margin: 1rem 0;
+        border-left: 5px solid #667eea;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Session state
     if 'saved_thoughts' not in st.session_state:
         st.session_state.saved_thoughts = []
 
-    st.header("📝 Mindful Journal")
+    # Header
+    st.markdown("""
+    <div class="notepad-header">
+        <h1>📝 Mindful Journal</h1>
+        <p>Write your thoughts freely</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    thought_content = st.text_area("How are you feeling today?", height=200)
+    # Input section
+    thought_content = st.text_area(
+        "How are you feeling today?",
+        height=200
+    )
 
+    word_count = len(thought_content.split())
+
+    # Save button
     if st.button("💾 Save Entry"):
 
         if thought_content.strip():
 
+            # 🔥 STEP 1: Detect mood
             mood = detect_mood(thought_content)
 
-            # 🔥 ANALYSIS
-            rumination, emotion = analyze_text(thought_content)
+            # 🔥 STEP 2: Rumination
+            rumination = detect_rumination(thought_content)
 
-            # 🔥 CLEAN BEFORE SAVE
-            rumination = clean_text(rumination)
-            emotion = clean_text(emotion)
+            # 🔥 STEP 3: Emotional clarity
+            emotion = detect_emotion_clarity(thought_content)
 
-            pos_words, neg_words = detect_sentiment_words(thought_content)
-
+            # 🔥 STEP 4: Save to DB (IMPORTANT)
             save_full_data(thought_content, mood, rumination, emotion)
+
+            # Save locally for display
+            entry = {
+                "content": thought_content,
+                "mood": mood,
+                "rumination": rumination,
+                "emotion": emotion,
+                "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "words": word_count
+            }
+
+            st.session_state.saved_thoughts.insert(0, entry)
 
             st.success("✅ Saved & analyzed successfully!")
 
-            # 🔥 CLEAN DISPLAY
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.subheader("🧠 Rumination")
-                st.success(rumination)
-
-            with col2:
-                st.subheader("💬 Emotional Clarity")
-                st.info(emotion)
-
-            st.subheader("😊 Sentiment")
-            st.write("Positive:", pos_words if pos_words else "None")
-            st.write("Negative:", neg_words if neg_words else "None")
+            # 🔥 SHOW RESULTS INSTANTLY
+            st.markdown("### 🧠 Analysis Result")
+            st.info(f"Rumination: {rumination}")
+            st.info(f"Emotional Clarity: {emotion}")
 
         else:
-            st.warning("Write something first")
+            st.warning("⚠️ Please write something first")
 
-    # 📚 DISPLAY
-    data = []
+    # Display saved thoughts
+    if st.session_state.saved_thoughts:
 
-    try:
-        from database import get_all_data
-        data = get_all_data()
-    except:
-        pass
+        st.markdown("### 📚 Your Entries")
 
-    if data:
-        st.subheader("📚 Your Entries")
-
-        for row in data:
-            text = row[1]
-            mood = row[2]
-            rumination = clean_text(row[3])
-            emotion = clean_text(row[4])
+        for i, thought in enumerate(st.session_state.saved_thoughts):
 
             st.markdown(f"""
-            **🧠 Mood:** {mood}  
-            **📝 Text:** {text}  
+            <div class="thought-card">
+                <b>📅 {thought['date']}</b><br>
+                🧠 Mood: {thought['mood']}<br><br>
+                {thought['content']}<br><br>
+                <b>Rumination:</b> {thought['rumination']}<br>
+                <b>Emotion:</b> {thought['emotion']}
+            </div>
+            """, unsafe_allow_html=True)
 
-            **🧠 Rumination:**  
-            {rumination}  
-
-            **💬 Emotional Clarity:**  
-            {emotion}  
-            """)
-            st.divider()
+            if st.button("🗑️ Delete", key=i):
+                st.session_state.saved_thoughts.pop(i)
+                st.rerun()
 
     else:
-        st.info("No entries yet")
+        st.info("No entries yet. Start writing ✍️")
